@@ -40,6 +40,7 @@ public:
 private:
   std::unique_ptr<htif_isasim_t> htif;
   char* mem; // main memory
+  char* tagmem; //TODO mem tags
   size_t memsz; // memory size in bytes
   mmu_t* debug_mmu;  // debug port into main memory
   std::vector<processor_t*> procs;

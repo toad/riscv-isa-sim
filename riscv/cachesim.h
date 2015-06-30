@@ -31,6 +31,7 @@ class cache_sim_t
   void set_miss_handler(cache_sim_t* mh) { miss_handler = mh; }
 
   static cache_sim_t* construct(const char* config, const char* name);
+  static cache_sim_t* construct_tc(const char* config, const char* name); //method for constructing a tag cache.
 
  protected:
   static const uint64_t VALID = 1ULL << 63;

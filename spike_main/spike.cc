@@ -39,6 +39,7 @@ int main(int argc, char** argv)
   std::unique_ptr<icache_sim_t> ic;
   std::unique_ptr<dcache_sim_t> dc;
   std::unique_ptr<cache_sim_t> l2;
+  std::unique_ptr<cache_sim_t> tc;
   std::function<extension_t*()> extension;
 
   option_parser_t parser;
@@ -51,6 +52,7 @@ int main(int argc, char** argv)
   parser.option(0, "ic", 1, [&](const char* s){ic.reset(new icache_sim_t(s));});
   parser.option(0, "dc", 1, [&](const char* s){dc.reset(new dcache_sim_t(s));});
   parser.option(0, "l2", 1, [&](const char* s){l2.reset(cache_sim_t::construct(s, "L2$"));});
+  parser.option(0, "tc", 1, [&](const char* s){tc.reset(cache_sim_t::construct_tc(s, "TC$"));});
   parser.option(0, "extension", 1, [&](const char* s){extension = find_extension(s);});
   parser.option(0, "extlib", 1, [&](const char *s){
     void *lib = dlopen(s, RTLD_NOW | RTLD_GLOBAL);
@@ -68,10 +70,19 @@ int main(int argc, char** argv)
 
   if (ic && l2) ic->set_miss_handler(&*l2);
   if (dc && l2) dc->set_miss_handler(&*l2);
+  if (l2 && tc) l2->set_miss_handler(&*tc);
   for (size_t i = 0; i < nprocs; i++)
   {
-    if (ic) s.get_core(i)->get_mmu()->register_memtracer(&*ic);
-    if (dc) s.get_core(i)->get_mmu()->register_memtracer(&*dc);
+    if (ic)
+    {
+        s.get_core(i)->get_mmu()->register_memtracer(&*ic);
+        //s.get_htif()->hooktc(&*l2);
+    }
+    if (dc) 
+    {
+        s.get_core(i)->get_mmu()->register_memtracer(&*dc);
+        //s.get_debug_mmu()->register_memtracer(&*l2);
+    }
     if (extension) s.get_core(i)->register_extension(extension());
   }
 

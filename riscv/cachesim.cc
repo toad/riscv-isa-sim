@@ -18,6 +18,8 @@ static void help()
   std::cerr << "  sets:ways:blocksize" << std::endl;
   std::cerr << "where sets, ways, and blocksize are positive integers, with" << std::endl;
   std::cerr << "sets and blocksize both powers of two and blocksize at least 8." << std::endl;
+  std::cerr << "Number of tag bits per addr must be 1, 2, 4." << std::endl;
+  std::cerr << "Tag cache cannot be used in conjunction with L2" << std::endl;
   exit(1);
 }
 
@@ -37,6 +39,30 @@ cache_sim_t* cache_sim_t::construct(const char* config, const char* name)
   return new cache_sim_t(sets, ways, linesz, name);
 }
 
+cache_sim_t* cache_sim_t::construct_tc(const char* config, const char* name)
+{
+  const char* wp = strchr(config, ':');
+  if (!wp++) help();
+  const char* bp = strchr(wp, ':');
+  if (!bp++) help();
+  const char* tp = strchr(bp, ':');
+  tp++;
+
+  size_t sets = atoi(std::string(config, wp).c_str());
+  size_t ways = atoi(std::string(wp, bp).c_str());
+  size_t linesz = atoi(std::string(bp, tp).c_str());
+  size_t tagbits = atoi(tp);
+  
+  if( tagbits!=1 && tagbits!=2 && tagbits!=4 )
+  {
+      help();
+  }
+
+  if (ways > 4 /* empirical */ && sets == 1)
+    return new fa_cache_sim_t(ways, linesz*64/tagbits, name);
+  return new cache_sim_t(sets, ways, linesz*64/tagbits, name);
+}
+
 void cache_sim_t::init()
 {
   if(sets == 0 || (sets & (sets-1)))
@@ -45,7 +71,7 @@ void cache_sim_t::init()
     help();
 
   idx_shift = 0;
-  for (size_t x = linesz; x; x >>= 1)
+  for (size_t x = linesz; x>1; x >>= 1)
     idx_shift++;
 
   tags = new uint64_t[sets*ways]();
