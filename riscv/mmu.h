@@ -43,6 +43,7 @@ public:
   #define load_func(type) \
     type##_t load_##type(reg_t addr) __attribute__((always_inline)) { \
       void* paddr = translate(addr, sizeof(type##_t), false, false); \
+	  if(tag_read(addr)==0x03) printf("Illegal load at addr %p.\n",addr); \
       return *(type##_t*)paddr; \
     }
 
@@ -63,6 +64,7 @@ public:
   #define store_func(type) \
     void store_##type(reg_t addr, type##_t val) { \
       void* paddr = translate(addr, sizeof(type##_t), true, false); \
+	  if(tag_read(addr)==0x03) printf("Illegal store at addr %p.\n",addr); \
       *(type##_t*)paddr = val; \
     }
 
