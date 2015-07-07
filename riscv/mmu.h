@@ -44,7 +44,7 @@ public:
     type##_t load_##type(reg_t addr) __attribute__((always_inline)) { \
       void* paddr = translate(addr, sizeof(type##_t), false, false); \
 	  if(tag_read(addr) & 2) { \
-	     printf("Illegal load at addr %p.\n",addr); \
+	     printf("Illegal load (tagged unreadable) at addr %p.\n",addr); \
 	     exit(2); \
 	  } \
       return *(type##_t*)paddr; \
@@ -68,7 +68,7 @@ public:
     void store_##type(reg_t addr, type##_t val) { \
       void* paddr = translate(addr, sizeof(type##_t), true, false); \
 	  if(tag_read(addr) & 1) { \
-	      printf("Illegal store at addr %p.\n",addr); \
+	      printf("Illegal store (tagged read-only) at addr %p.\n",addr); \
 	      exit(1); \
 	  } \
       *(type##_t*)paddr = val; \
