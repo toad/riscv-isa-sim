@@ -38,6 +38,13 @@ class mmu_t
 public:
   mmu_t(char* _mem, char* _tagmem, size_t _memsz);
   ~mmu_t();
+  
+  /** Tags:
+    * Bit 0: Disallow write
+    * Bit 1: Disallow read
+    * Bit 2: Clear after write
+    * E.g. 4 = clear tag on write (clean/dirty), 6 = write-then-read
+    */
 
   // template for functions that load an aligned value from memory
   #define load_func(type) \
@@ -67,9 +74,13 @@ public:
   #define store_func(type) \
     void store_##type(reg_t addr, type##_t val) { \
       void* paddr = translate(addr, sizeof(type##_t), true, false); \
-	  if(tag_read(addr) & 1) { \
+	  unsigned char tag = tag_read(addr); \
+	  if(tag & 1) { \
 	      printf("Illegal store (tagged read-only) at addr %p.\n",addr); \
 	      exit(1); \
+	  } else if(tag & 4) { \
+	      printf("Clearing tag after successful write at addr %p",addr); \
+	      tag_write(addr, 0); \
 	  } \
       *(type##_t*)paddr = val; \
     }
