@@ -79,7 +79,7 @@ public:
 	      printf("Illegal store (tagged read-only) at addr %p.\n",addr); \
 	      exit(1); \
 	  } else if(tag & 4) { \
-	      printf("Clearing tag after successful write at addr %p",addr); \
+	      printf("Clearing tag after successful write at addr %p\n",addr); \
 	      tag_write(addr, 0); \
 	  } \
       *(type##_t*)paddr = val; \
