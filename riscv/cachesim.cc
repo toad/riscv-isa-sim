@@ -18,6 +18,8 @@ static void help()
   std::cerr << "  sets:ways:blocksize" << std::endl;
   std::cerr << "where sets, ways, and blocksize are positive integers, with" << std::endl;
   std::cerr << "sets and blocksize both powers of two and blocksize at least 8." << std::endl;
+  std::cerr << "Number of tag bits per addr must be 1, 2, 4." << std::endl;
+  std::cerr << "Tag cache cannot be used in conjunction with L2" << std::endl;
   exit(1);
 }
 

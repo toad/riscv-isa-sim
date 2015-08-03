@@ -34,6 +34,10 @@ sim_t::sim_t(const char* isa, size_t nprocs, size_t mem_mb,
   memsz = memsz0;
   while ((mem = (char*)calloc(1, memsz)) == NULL)
     memsz = memsz*10/11/quantum*quantum;
+  
+  //TODO allocate memory for mem tags, using char to store 8 tags, therefore using memsz/8 chars
+  tagmem = (char*)calloc(1, memsz>>3);
+  
 
   //TODO allocate memory for mem tags, using char to store 8 tags, therefore using memsz/8 chars
   tagmem = (char*)calloc(1, memsz>>3);
@@ -44,8 +48,10 @@ sim_t::sim_t(const char* isa, size_t nprocs, size_t mem_mb,
 
   debug_mmu = new mmu_t(mem, tagmem, memsz);
 
-  for (size_t i = 0; i < procs.size(); i++)
+  for (size_t i = 0; i < procs.size(); i++) {
     procs[i] = new processor_t(isa, this, i);
+  }
+
 }
 
 sim_t::~sim_t()
