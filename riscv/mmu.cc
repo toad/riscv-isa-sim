@@ -34,89 +34,104 @@ void* mmu_t::refill_tlb(reg_t addr, reg_t bytes, bool store, bool fetch)
   reg_t idx = (addr >> PGSHIFT) % TLB_ENTRIES;
   reg_t expected_tag = addr >> PGSHIFT;
 
-  reg_t pte = walk(addr);
-
-  reg_t pte_perm = pte & PTE_PERM;
-  if (proc == NULL || (proc->state.sr & SR_S))
-    pte_perm = (pte_perm/(PTE_SX/PTE_UX)) & PTE_PERM;
-  pte_perm |= pte & PTE_V;
-
-  reg_t perm = (fetch ? PTE_UX : store ? PTE_UW : PTE_UR) | PTE_V;
-  if(unlikely((pte_perm & perm) != perm))
-  {
-    if (fetch)
-      throw trap_instruction_access_fault(addr);
-    if (store)
-      throw trap_store_access_fault(addr);
-    throw trap_load_access_fault(addr);
+  reg_t pgbase;
+  if (unlikely(!proc)) {
+    pgbase = addr & -PGSIZE;
+  } else {
+    reg_t mode = get_field(proc->state.mstatus, MSTATUS_PRV);
+    if (!fetch && get_field(proc->state.mstatus, MSTATUS_MPRV))
+      mode = get_field(proc->state.mstatus, MSTATUS_PRV1);
+    if (get_field(proc->state.mstatus, MSTATUS_VM) == VM_MBARE)
+      mode = PRV_M;
+  
+    if (mode == PRV_M) {
+      reg_t msb_mask = (reg_t(2) << (proc->xlen-1))-1; // zero-extend from xlen
+      pgbase = addr & -PGSIZE & msb_mask;
+    } else {
+      pgbase = walk(addr, mode > PRV_U, store, fetch);
+    }
   }
 
   reg_t pgoff = addr & (PGSIZE-1);
-  reg_t pgbase = pte >> PGSHIFT << PGSHIFT;
   reg_t paddr = pgbase + pgoff;
 
-  if (unlikely(tracer.interested_in_range(pgbase, pgbase + PGSIZE, store, fetch)))
+  if (pgbase >= memsz) {
+    if (fetch) throw trap_instruction_access_fault(addr);
+    else if (store) throw trap_store_access_fault(addr);
+    else throw trap_load_access_fault(addr);
+  }
+
+  bool trace = tracer.interested_in_range(pgbase, pgbase + PGSIZE, store, fetch);
+  if (unlikely(!fetch && trace))
     tracer.trace(paddr, bytes, store, fetch);
   else
   {
-    tlb_load_tag[idx] = (pte_perm & PTE_UR) ? expected_tag : -1;
-    tlb_store_tag[idx] = (pte_perm & PTE_UW) ? expected_tag : -1;
-    tlb_insn_tag[idx] = (pte_perm & PTE_UX) ? expected_tag : -1;
-    tlb_data[idx] = mem + pgbase - (addr & ~(PGSIZE-1));
+    if (tlb_load_tag[idx] != expected_tag) tlb_load_tag[idx] = -1;
+    if (tlb_store_tag[idx] != expected_tag) tlb_store_tag[idx] = -1;
+    if (tlb_insn_tag[idx] != expected_tag) tlb_insn_tag[idx] = -1;
+
+    if (fetch) tlb_insn_tag[idx] = expected_tag;
+    else if (store) tlb_store_tag[idx] = expected_tag;
+    else tlb_load_tag[idx] = expected_tag;
+
+    tlb_data[idx] = mem + pgbase - (addr & -PGSIZE);
   }
 
   return mem + paddr;
 }
 
-pte_t mmu_t::walk(reg_t addr)
+reg_t mmu_t::walk(reg_t addr, bool supervisor, bool store, bool fetch)
 {
-  pte_t pte = 0;
-
-  // the address must be a canonical sign-extended VA_BITS-bit number
-  int shift = 8*sizeof(reg_t) - VA_BITS;
-  if (((sreg_t)addr << shift >> shift) != (sreg_t)addr)
-    ;
-  else if (proc == NULL || !(proc->state.sr & SR_VM))
+  int levels, ptidxbits, ptesize;
+  switch (get_field(proc->get_state()->mstatus, MSTATUS_VM))
   {
-    if(addr < memsz)
-      pte = PTE_V | PTE_PERM | ((addr >> PGSHIFT) << PGSHIFT);
+    case VM_SV32: levels = 2; ptidxbits = 10; ptesize = 4; break;
+    case VM_SV39: levels = 3; ptidxbits = 9; ptesize = 8; break;
+    case VM_SV48: levels = 4; ptidxbits = 9; ptesize = 8; break;
+    default: abort();
   }
-  else
-  {
-    reg_t base = proc->get_state()->ptbr;
-    reg_t ptd;
 
-    int ptshift = (LEVELS-1)*PTIDXBITS;
-    for(reg_t i = 0; i < LEVELS; i++, ptshift -= PTIDXBITS)
-    {
-      reg_t idx = (addr >> (PGSHIFT+ptshift)) & ((1<<PTIDXBITS)-1);
+  // verify bits xlen-1:va_bits-1 are all equal
+  int va_bits = PGSHIFT + levels * ptidxbits;
+  reg_t mask = (reg_t(1) << (proc->xlen - (va_bits-1))) - 1;
+  reg_t masked_msbs = (addr >> (va_bits-1)) & mask;
+  if (masked_msbs != 0 && masked_msbs != mask)
+    return -1;
 
-      reg_t pte_addr = base + idx*sizeof(pte_t);
-      if(pte_addr >= memsz)
+  reg_t base = proc->get_state()->sptbr;
+  int ptshift = (levels - 1) * ptidxbits;
+  for (int i = 0; i < levels; i++, ptshift -= ptidxbits) {
+    reg_t idx = (addr >> (PGSHIFT + ptshift)) & ((1 << ptidxbits) - 1);
+
+    // check that physical address of PTE is legal
+    reg_t pte_addr = base + idx * ptesize;
+    if (pte_addr >= memsz)
+      break;
+
+    void* ppte = mem + pte_addr;
+    reg_t pte = ptesize == 4 ? *(uint32_t*)ppte : *(uint64_t*)ppte;
+    reg_t ppn = pte >> PTE_PPN_SHIFT;
+
+    if (PTE_TABLE(pte)) { // next level of page table
+      base = ppn << PGSHIFT;
+    } else if (!PTE_CHECK_PERM(pte, supervisor, store, fetch)) {
+      break;
+    } else {
+      // set referenced and possibly dirty bits.
+      *(uint32_t*)ppte |= PTE_R | (store * PTE_D);
+      // for superpage mappings, make a fake leaf PTE for the TLB's benefit.
+      reg_t vpn = addr >> PGSHIFT;
+      reg_t addr = (ppn | (vpn & ((reg_t(1) << ptshift) - 1))) << PGSHIFT;
+
+      // check that physical address is legal
+      if (addr >= memsz)
         break;
 
-      ptd = *(pte_t*)(mem+pte_addr);
-
-      if (!(ptd & PTE_V)) // invalid mapping
-        break;
-      else if (ptd & PTE_T) // next level of page table
-        base = (ptd >> PGSHIFT) << PGSHIFT;
-      else // the actual PTE
-      {
-        // if this PTE is from a larger PT, fake a leaf
-        // PTE so the TLB will work right
-        reg_t vpn = addr >> PGSHIFT;
-        ptd |= (vpn & ((1<<(ptshift))-1)) << PGSHIFT;
-
-        // fault if physical addr is out of range
-        if (((ptd >> PGSHIFT) << PGSHIFT) < memsz)
-          pte = ptd;
-        break;
-      }
+      return addr;
     }
   }
 
-  return pte;
+  return -1;
 }
 
 void mmu_t::register_memtracer(memtracer_t* t)

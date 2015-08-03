@@ -18,9 +18,10 @@ static void handle_signal(int sig)
   signal(sig, &handle_signal);
 }
 
-sim_t::sim_t(size_t nprocs, size_t mem_mb, const std::vector<std::string>& args)
+sim_t::sim_t(const char* isa, size_t nprocs, size_t mem_mb,
+             const std::vector<std::string>& args)
   : htif(new htif_isasim_t(this, args)), procs(std::max(nprocs, size_t(1))),
-    current_step(0), current_proc(0), debug(false)
+    rtc(0), current_step(0), current_proc(0), debug(false)
 {
   signal(SIGINT, &handle_signal);
   // allocate target machine's memory, shrinking it as necessary
@@ -45,7 +46,7 @@ sim_t::sim_t(size_t nprocs, size_t mem_mb, const std::vector<std::string>& args)
   debug_mmu = new mmu_t(mem, tagmem, memsz);
 
   for (size_t i = 0; i < procs.size(); i++) {
-    procs[i] = new processor_t(this, new mmu_t(mem, tagmem, memsz), i);
+    procs[i] = new processor_t(isa, this, new mmu_t(mem, tagmem, memsz), i);
   }
 
 }
@@ -53,11 +54,7 @@ sim_t::sim_t(size_t nprocs, size_t mem_mb, const std::vector<std::string>& args)
 sim_t::~sim_t()
 {
   for (size_t i = 0; i < procs.size(); i++)
-  {
-    mmu_t* pmmu = procs[i]->get_mmu();
     delete procs[i];
-    delete pmmu;
-  }
   delete debug_mmu;
   free(mem);
 }
@@ -102,8 +99,10 @@ void sim_t::step(size_t n)
     {
       current_step = 0;
       procs[current_proc]->yield_load_reservation();
-      if (++current_proc == procs.size())
+      if (++current_proc == procs.size()) {
         current_proc = 0;
+        rtc += INTERLEAVE / INSNS_PER_RTC_TICK;
+      }
 
       htif->tick();
     }

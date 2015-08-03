@@ -19,12 +19,16 @@
 #undef STATE
 #define STATE state
 
-processor_t::processor_t(sim_t* _sim, mmu_t* _mmu, uint32_t _id)
-  : sim(_sim), mmu(_mmu), ext(NULL), disassembler(new disassembler_t),
-    id(_id), run(false), debug(false), serialized(false)
+processor_t::processor_t(const char* isa, sim_t* sim, uint32_t id)
+  : sim(sim), ext(NULL), disassembler(new disassembler_t),
+    id(id), run(false), debug(false)
 {
-  reset(true);
+  parse_isa_string(isa);
+
+  mmu = new mmu_t(sim->mem, sim->memsz);
   mmu->set_processor(this);
+
+  reset(true);
 
   #define DECLARE_INSN(name, match, mask) REGISTER_INSN(this, name, match, mask)
   #include "encoding.h"
@@ -44,36 +48,66 @@ processor_t::~processor_t()
   }
 #endif
 
+  delete mmu;
   delete disassembler;
+}
+
+static void bad_isa_string(const char* isa)
+{
+  fprintf(stderr, "error: bad --isa option %s\n", isa);
+  abort();
+}
+
+void processor_t::parse_isa_string(const char* isa)
+{
+  const char* p = isa;
+  const char* all_subsets = "IMAFDC";
+
+  max_xlen = 64;
+  cpuid = reg_t(2) << 62;
+
+  if (strncmp(p, "RV32", 4) == 0)
+    max_xlen = 32, cpuid = 0, p += 4;
+  else if (strncmp(p, "RV64", 4) == 0)
+    p += 4;
+  else if (strncmp(p, "RV", 2) == 0)
+    p += 2;
+
+  cpuid |= 1L << ('S' - 'A'); // advertise support for supervisor mode
+
+  if (!*p)
+    p = all_subsets;
+  else if (*p != 'I')
+    bad_isa_string(isa);
+
+  while (*p) {
+    cpuid |= 1L << (*p - 'A');
+
+    if (auto next = strchr(all_subsets, *p)) {
+      all_subsets = next + 1;
+      p++;
+    } else if (*p == 'X') {
+      const char* ext = p+1, *end = ext;
+      while (islower(*end))
+        end++;
+      register_extension(find_extension(std::string(ext, end - ext).c_str())());
+      p = end;
+    } else {
+      bad_isa_string(isa);
+    }
+  }
+
+  if (supports_extension('D') && !supports_extension('F'))
+    bad_isa_string(isa);
 }
 
 void state_t::reset()
 {
-  // the ISA guarantees on boot that the PC is 0x2000 and the the processor
-  // is in supervisor mode, and in 64-bit mode, if supported, with traps
-  // and virtual memory disabled.
-  sr = SR_S | SR_S64 | SR_U64;
-  pc = 0x2000;
-
-  // the following state is undefined upon boot-up,
-  // but we zero it for determinism
-  XPR.reset();
-  FPR.reset();
-
-  epc = 0;
-  badvaddr = 0;
-  evec = 0;
-  ptbr = 0;
-  pcr_k0 = 0;
-  pcr_k1 = 0;
-  cause = 0;
-  tohost = 0;
-  fromhost = 0;
-  count = 0;
-  compare = 0;
-  fflags = 0;
-  frm = 0;
-
+  memset(this, 0, sizeof(*this));
+  mstatus = set_field(mstatus, MSTATUS_PRV, PRV_M);
+  mstatus = set_field(mstatus, MSTATUS_PRV1, PRV_S);
+  mstatus = set_field(mstatus, MSTATUS_PRV2, PRV_S);
+  pc = DEFAULT_MTVEC + 0x100;
   load_reservation = -1;
 }
 
@@ -95,38 +129,45 @@ void processor_t::reset(bool value)
     return;
   run = !value;
 
-  state.reset(); // reset the core
-  set_pcr(CSR_STATUS, state.sr);
+  state.reset();
+  set_csr(CSR_MSTATUS, state.mstatus);
 
   if (ext)
     ext->reset(); // reset the extension
 }
 
-struct serialize_t {};
-
-void processor_t::serialize()
+void processor_t::raise_interrupt(reg_t which)
 {
-  if (serialized)
-    serialized = false;
-  else
-    serialized = true, throw serialize_t();
+  throw trap_t(((reg_t)1 << (max_xlen-1)) | which);
 }
 
 void processor_t::take_interrupt()
 {
-  int irqs = ((state.sr & SR_IP) >> SR_IP_SHIFT) & (state.sr >> SR_IM_SHIFT);
-  if (likely(!irqs) || likely(!(state.sr & SR_EI)))
-    return;
+  int priv = get_field(state.mstatus, MSTATUS_PRV);
+  int ie = get_field(state.mstatus, MSTATUS_IE);
+  reg_t interrupts = state.mie & state.mip;
 
-  for (int i = 0; ; i++)
-    if ((irqs >> i) & 1)
-      throw trap_t((1ULL << ((state.sr & SR_S64) ? 63 : 31)) + i);
+  if (priv < PRV_M || (priv == PRV_M && ie)) {
+    if (interrupts & MIP_MSIP)
+      raise_interrupt(IRQ_SOFT);
+
+    if (state.fromhost != 0)
+      raise_interrupt(IRQ_HOST);
+  }
+
+  if (priv < PRV_S || (priv == PRV_S && ie)) {
+    if (interrupts & MIP_SSIP)
+      raise_interrupt(IRQ_SOFT);
+
+    if (interrupts & MIP_STIP)
+      raise_interrupt(IRQ_TIMER);
+  }
 }
 
 static void commit_log(state_t* state, reg_t pc, insn_t insn)
 {
 #ifdef RISCV_ENABLE_COMMITLOG
-  if (state->sr & SR_EI) {
+  if (get_field(state->mstatus, MSTATUS_IE)) {
     uint64_t mask = (insn.length() == 8 ? uint64_t(0) : (uint64_t(1) << (insn.length() * 8))) - 1;
     if (state->log_reg_write.addr) {
       fprintf(stderr, "0x%016" PRIx64 " (0x%08" PRIx64 ") %c%2" PRIu64 " 0x%016" PRIx64 "\n",
@@ -154,23 +195,20 @@ inline void processor_t::update_histogram(size_t pc)
 static reg_t execute_insn(processor_t* p, reg_t pc, insn_fetch_t fetch)
 {
   reg_t npc = fetch.func(p, fetch.insn, pc);
-  commit_log(p->get_state(), pc, fetch.insn);
-  p->update_histogram(pc);
+  if (npc != PC_SERIALIZE) {
+    commit_log(p->get_state(), pc, fetch.insn);
+    p->update_histogram(pc);
+  }
   return npc;
 }
 
-static void update_timer(state_t* state, size_t instret)
+void processor_t::check_timer()
 {
-  uint64_t count0 = (uint64_t)(uint32_t)state->count;
-  state->count += instret;
-  uint64_t before = count0 - state->compare;
-  if (int64_t(before ^ (before + instret)) < 0)
-    state->sr |= (1 << (IRQ_TIMER + SR_IP_SHIFT));
-}
-
-static size_t next_timer(state_t* state)
-{
-  return state->compare - (uint32_t)state->count;
+  // this assumes the rtc doesn't change asynchronously during step(),
+  if (state.stimecmp >= (uint32_t)state.prev_rtc
+      && state.stimecmp < (uint32_t)sim->rtc)
+    state.mip |= MIP_STIP;
+  state.prev_rtc = sim->rtc;
 }
 
 void processor_t::step(size_t n)
@@ -181,19 +219,30 @@ void processor_t::step(size_t n)
 
   if (unlikely(!run || !n))
     return;
-  n = std::min(n, next_timer(&state) | 1U);
+
+  #define maybe_serialize() \
+   if (unlikely(pc == PC_SERIALIZE)) { \
+     pc = state.pc; \
+     state.serialized = true; \
+     break; \
+   }
 
   try
   {
+    check_timer();
     take_interrupt();
 
     if (unlikely(debug))
     {
-      while (instret++ < n)
+      while (instret < n)
       {
         insn_fetch_t fetch = mmu->load_insn(pc);
-        disasm(fetch.insn);
+        if (!state.serialized)
+          disasm(fetch.insn);
         pc = execute_insn(this, pc, fetch);
+        maybe_serialize();
+        instret++;
+        state.pc = pc;
       }
     }
     else while (instret < n)
@@ -205,48 +254,76 @@ void processor_t::step(size_t n)
         insn_fetch_t fetch = ic_entry->data; \
         ic_entry++; \
         pc = execute_insn(this, pc, fetch); \
-        instret++; \
         if (idx == mmu_t::ICACHE_ENTRIES-1) break; \
         if (unlikely(ic_entry->tag != pc)) break; \
+        if (unlikely(instret+1 == n)) break; \
+        instret++; \
+        state.pc = pc; \
       }
 
       switch (idx) {
         #include "icache.h"
       }
+
+      maybe_serialize();
+      instret++;
+      state.pc = pc;
     }
   }
   catch(trap_t& t)
   {
-    pc = take_trap(t, pc);
+    take_trap(t, pc);
   }
-  catch(serialize_t& s) {}
 
-  state.pc = pc;
-  update_timer(&state, instret);
+  state.minstret += instret;
+
+  // tail-recurse if we didn't execute as many instructions as we'd hoped
+  if (instret < n)
+    step(n - instret);
 }
 
-reg_t processor_t::take_trap(trap_t& t, reg_t epc)
+void processor_t::push_privilege_stack()
+{
+  reg_t s = state.mstatus;
+  s = set_field(s, MSTATUS_PRV2, get_field(state.mstatus, MSTATUS_PRV1));
+  s = set_field(s, MSTATUS_IE2, get_field(state.mstatus, MSTATUS_IE1));
+  s = set_field(s, MSTATUS_PRV1, get_field(state.mstatus, MSTATUS_PRV));
+  s = set_field(s, MSTATUS_IE1, get_field(state.mstatus, MSTATUS_IE));
+  s = set_field(s, MSTATUS_PRV, PRV_M);
+  s = set_field(s, MSTATUS_MPRV, 0);
+  s = set_field(s, MSTATUS_IE, 0);
+  set_csr(CSR_MSTATUS, s);
+}
+
+void processor_t::pop_privilege_stack()
+{
+  reg_t s = state.mstatus;
+  s = set_field(s, MSTATUS_PRV, get_field(state.mstatus, MSTATUS_PRV1));
+  s = set_field(s, MSTATUS_IE, get_field(state.mstatus, MSTATUS_IE1));
+  s = set_field(s, MSTATUS_PRV1, get_field(state.mstatus, MSTATUS_PRV2));
+  s = set_field(s, MSTATUS_IE1, get_field(state.mstatus, MSTATUS_IE2));
+  s = set_field(s, MSTATUS_PRV2, PRV_U);
+  s = set_field(s, MSTATUS_IE2, 1);
+  set_csr(CSR_MSTATUS, s);
+}
+
+void processor_t::take_trap(trap_t& t, reg_t epc)
 {
   if (debug)
     fprintf(stderr, "core %3d: exception %s, epc 0x%016" PRIx64 "\n",
             id, t.name(), epc);
 
-  // switch to supervisor, set previous supervisor bit, disable interrupts
-  set_pcr(CSR_STATUS, (((state.sr & ~SR_EI) | SR_S) & ~SR_PS & ~SR_PEI) |
-                      ((state.sr & SR_S) ? SR_PS : 0) |
-                      ((state.sr & SR_EI) ? SR_PEI : 0));
-
+  state.pc = DEFAULT_MTVEC + 0x40 * get_field(state.mstatus, MSTATUS_PRV);
+  push_privilege_stack();
   yield_load_reservation();
-  state.cause = t.cause();
-  state.epc = epc;
+  state.mcause = t.cause();
+  state.mepc = epc;
   t.side_effects(&state); // might set badvaddr etc.
-  return state.evec;
 }
 
 void processor_t::deliver_ipi()
 {
-  if (run)
-    set_pcr(CSR_CLEAR_IPI, 1);
+  state.mip |= MIP_MSIP;
 }
 
 void processor_t::disasm(insn_t insn)
@@ -256,145 +333,241 @@ void processor_t::disasm(insn_t insn)
           id, state.pc, bits, disassembler->disassemble(insn).c_str());
 }
 
-void processor_t::set_pcr(int which, reg_t val)
+static bool validate_priv(reg_t priv)
+{
+  return priv == PRV_U || priv == PRV_S || priv == PRV_M;
+}
+
+static bool validate_vm(int max_xlen, reg_t vm)
+{
+  if (max_xlen == 64 && (vm == VM_SV39 || vm == VM_SV48))
+    return true;
+  if (max_xlen == 32 && vm == VM_SV32)
+    return true;
+  return vm == VM_MBARE;
+}
+
+void processor_t::set_csr(int which, reg_t val)
 {
   switch (which)
   {
     case CSR_FFLAGS:
+      dirty_fp_state;
       state.fflags = val & (FSR_AEXC >> FSR_AEXC_SHIFT);
       break;
     case CSR_FRM:
+      dirty_fp_state;
       state.frm = val & (FSR_RD >> FSR_RD_SHIFT);
       break;
     case CSR_FCSR:
+      dirty_fp_state;
       state.fflags = (val & FSR_AEXC) >> FSR_AEXC_SHIFT;
       state.frm = (val & FSR_RD) >> FSR_RD_SHIFT;
       break;
-    case CSR_STATUS:
-      state.sr = (val & ~SR_IP) | (state.sr & SR_IP);
-#ifndef RISCV_ENABLE_64BIT
-      state.sr &= ~(SR_S64 | SR_U64);
-#endif
-#ifndef RISCV_ENABLE_FPU
-      state.sr &= ~SR_EF;
-#endif
-      if (!ext)
-        state.sr &= ~SR_EA;
-      state.sr &= ~SR_ZERO;
-      rv64 = (state.sr & SR_S) ? (state.sr & SR_S64) : (state.sr & SR_U64);
-      mmu->flush_tlb();
+    case CSR_MTIME:
+    case CSR_STIMEW:
+      // this implementation ignores writes to MTIME
       break;
-    case CSR_EPC:
-      state.epc = val;
+    case CSR_MTIMEH:
+    case CSR_STIMEHW:
+      // this implementation ignores writes to MTIME
       break;
-    case CSR_EVEC:
-      state.evec = val & ~3;
+    case CSR_TIMEW:
+      val -= sim->rtc;
+      if (xlen == 32)
+        state.sutime_delta = (uint32_t)val | (state.sutime_delta >> 32 << 32);
+      else
+        state.sutime_delta = val;
       break;
-    case CSR_COUNT:
-      state.count = val;
+    case CSR_TIMEHW:
+      val = ((val << 32) - sim->rtc) >> 32;
+      state.sutime_delta = (val << 32) | (uint32_t)state.sutime_delta;
       break;
-    case CSR_COUNTH:
-      state.count = (val << 32) | (uint32_t)state.count;
+    case CSR_CYCLEW:
+    case CSR_INSTRETW:
+      val -= state.minstret;
+      if (xlen == 32)
+        state.suinstret_delta = (uint32_t)val | (state.suinstret_delta >> 32 << 32);
+      else
+        state.suinstret_delta = val;
       break;
-    case CSR_COMPARE:
-      serialize();
-      set_interrupt(IRQ_TIMER, false);
-      state.compare = val;
+    case CSR_CYCLEHW:
+    case CSR_INSTRETHW:
+      val = ((val << 32) - state.minstret) >> 32;
+      state.suinstret_delta = (val << 32) | (uint32_t)state.suinstret_delta;
       break;
-    case CSR_PTBR:
-      state.ptbr = val & ~(PGSIZE-1);
+    case CSR_MSTATUS: {
+      if ((val ^ state.mstatus) & (MSTATUS_VM | MSTATUS_PRV | MSTATUS_PRV1 | MSTATUS_MPRV))
+        mmu->flush_tlb();
+
+      reg_t mask = MSTATUS_IE | MSTATUS_IE1 | MSTATUS_IE2 | MSTATUS_MPRV
+                   | MSTATUS_FS | (ext ? MSTATUS_XS : 0);
+
+      if (validate_vm(max_xlen, get_field(val, MSTATUS_VM)))
+        mask |= MSTATUS_VM;
+      if (validate_priv(get_field(val, MSTATUS_PRV)))
+        mask |= MSTATUS_PRV;
+      if (validate_priv(get_field(val, MSTATUS_PRV1)))
+        mask |= MSTATUS_PRV1;
+      if (validate_priv(get_field(val, MSTATUS_PRV2)))
+        mask |= MSTATUS_PRV2;
+
+      state.mstatus = (state.mstatus & ~mask) | (val & mask);
+
+      bool dirty = (state.mstatus & MSTATUS_FS) == MSTATUS_FS;
+      dirty |= (state.mstatus & MSTATUS_XS) == MSTATUS_XS;
+      if (max_xlen == 32)
+        state.mstatus = set_field(state.mstatus, MSTATUS32_SD, dirty);
+      else
+        state.mstatus = set_field(state.mstatus, MSTATUS64_SD, dirty);
+
+      // spike supports the notion of xlen < max_xlen, but current priv spec
+      // doesn't provide a mechanism to run RV32 software on an RV64 machine
+      xlen = max_xlen;
       break;
-    case CSR_SEND_IPI:
-      sim->send_ipi(val);
+    }
+    case CSR_MIP: {
+      reg_t mask = MIP_SSIP | MIP_MSIP;
+      state.mip = (state.mip & ~mask) | (val & mask);
       break;
-    case CSR_CLEAR_IPI:
-      set_interrupt(IRQ_IPI, val & 1);
+    }
+    case CSR_MIE: {
+      reg_t mask = MIP_SSIP | MIP_MSIP | MIP_STIP;
+      state.mie = (state.mie & ~mask) | (val & mask);
       break;
-    case CSR_SUP0:
-      state.pcr_k0 = val;
+    }
+    case CSR_SSTATUS: {
+      reg_t ms = state.mstatus;
+      ms = set_field(ms, MSTATUS_IE, get_field(val, SSTATUS_IE));
+      ms = set_field(ms, MSTATUS_IE1, get_field(val, SSTATUS_PIE));
+      ms = set_field(ms, MSTATUS_PRV1, get_field(val, SSTATUS_PS));
+      ms = set_field(ms, MSTATUS_FS, get_field(val, SSTATUS_FS));
+      ms = set_field(ms, MSTATUS_XS, get_field(val, SSTATUS_XS));
+      ms = set_field(ms, MSTATUS_MPRV, get_field(val, SSTATUS_MPRV));
+      return set_csr(CSR_MSTATUS, ms);
+    }
+    case CSR_SIP: {
+      reg_t mask = MIP_SSIP;
+      state.mip = (state.mip & ~mask) | (val & mask);
       break;
-    case CSR_SUP1:
-      state.pcr_k1 = val;
+    }
+    case CSR_SIE: {
+      reg_t mask = MIP_SSIP | MIP_STIP;
+      state.mie = (state.mie & ~mask) | (val & mask);
       break;
-    case CSR_TOHOST:
+    }
+    case CSR_SEPC: state.sepc = val; break;
+    case CSR_STVEC: state.stvec = val & ~3; break;
+    case CSR_STIMECMP:
+      state.mip &= ~MIP_STIP;
+      state.stimecmp = val;
+      break;
+    case CSR_SPTBR: state.sptbr = zext_xlen(val & -PGSIZE); break;
+    case CSR_SSCRATCH: state.sscratch = val; break;
+    case CSR_MEPC: state.mepc = val; break;
+    case CSR_MSCRATCH: state.mscratch = val; break;
+    case CSR_MCAUSE: state.mcause = val; break;
+    case CSR_MBADADDR: state.mbadaddr = val; break;
+    case CSR_SEND_IPI: sim->send_ipi(val); break;
+    case CSR_MTOHOST:
       if (state.tohost == 0)
         state.tohost = val;
       break;
-    case CSR_FROMHOST:
-      set_fromhost(val);
-      break;
+    case CSR_MFROMHOST: state.fromhost = val; break;
   }
 }
 
-void processor_t::set_fromhost(reg_t val)
-{
-  set_interrupt(IRQ_HOST, val != 0);
-  state.fromhost = val;
-}
-
-reg_t processor_t::get_pcr(int which)
+reg_t processor_t::get_csr(int which)
 {
   switch (which)
   {
     case CSR_FFLAGS:
       require_fp;
+      if (!supports_extension('F'))
+        break;
       return state.fflags;
     case CSR_FRM:
       require_fp;
+      if (!supports_extension('F'))
+        break;
       return state.frm;
     case CSR_FCSR:
       require_fp;
-      return (state.fflags << FSR_AEXC_SHIFT) | (state.frm << FSR_RD_SHIFT);
-    case CSR_STATUS:
-      return state.sr;
-    case CSR_EPC:
-      return state.epc;
-    case CSR_BADVADDR:
-      return state.badvaddr;
-    case CSR_EVEC:
-      return state.evec;
-    case CSR_CYCLE:
-    case CSR_TIME:
-    case CSR_INSTRET:
-    case CSR_COUNT:
-      serialize();
-      return state.count;
-    case CSR_CYCLEH:
-    case CSR_TIMEH:
-    case CSR_INSTRETH:
-    case CSR_COUNTH:
-      if (rv64)
+      if (!supports_extension('F'))
         break;
-      serialize();
-      return state.count >> 32;
-    case CSR_COMPARE:
-      return state.compare;
-    case CSR_CAUSE:
-      return state.cause;
-    case CSR_PTBR:
-      return state.ptbr;
-    case CSR_SEND_IPI:
-    case CSR_CLEAR_IPI:
-      return 0;
-    case CSR_ASID:
-      return 0;
-    case CSR_FATC:
-      mmu->flush_tlb();
-      return 0;
-    case CSR_HARTID:
-      return id;
-    case CSR_IMPL:
-      return 1;
-    case CSR_SUP0:
-      return state.pcr_k0;
-    case CSR_SUP1:
-      return state.pcr_k1;
-    case CSR_TOHOST:
+      return (state.fflags << FSR_AEXC_SHIFT) | (state.frm << FSR_RD_SHIFT);
+    case CSR_MTIME:
+    case CSR_STIME:
+    case CSR_STIMEW:
+      return sim->rtc;
+    case CSR_MTIMEH:
+    case CSR_STIMEH:
+    case CSR_STIMEHW:
+      return sim->rtc >> 32;
+    case CSR_TIME:
+    case CSR_TIMEW:
+      return sim->rtc + state.sutime_delta;
+    case CSR_CYCLE:
+    case CSR_CYCLEW:
+    case CSR_INSTRET:
+    case CSR_INSTRETW:
+      return state.minstret + state.suinstret_delta;
+    case CSR_TIMEH:
+    case CSR_TIMEHW:
+      if (xlen == 64)
+        break;
+      return (sim->rtc + state.sutime_delta) >> 32;
+    case CSR_CYCLEH:
+    case CSR_INSTRETH:
+    case CSR_CYCLEHW:
+    case CSR_INSTRETHW:
+      if (xlen == 64)
+        break;
+      return (state.minstret + state.suinstret_delta) >> 32;
+    case CSR_SSTATUS: {
+      reg_t ss = 0;
+      ss = set_field(ss, SSTATUS_IE, get_field(state.mstatus, MSTATUS_IE));
+      ss = set_field(ss, SSTATUS_PIE, get_field(state.mstatus, MSTATUS_IE1));
+      ss = set_field(ss, SSTATUS_PS, get_field(state.mstatus, MSTATUS_PRV1));
+      ss = set_field(ss, SSTATUS_FS, get_field(state.mstatus, MSTATUS_FS));
+      ss = set_field(ss, SSTATUS_XS, get_field(state.mstatus, MSTATUS_XS));
+      ss = set_field(ss, SSTATUS_MPRV, get_field(state.mstatus, MSTATUS_MPRV));
+      if (get_field(state.mstatus, MSTATUS64_SD))
+        ss = set_field(ss, (xlen == 32 ? SSTATUS32_SD : SSTATUS64_SD), 1);
+      return ss;
+    }
+    case CSR_SIP: return state.mip & (MIP_SSIP | MIP_STIP);
+    case CSR_SIE: return state.mie & (MIP_SSIP | MIP_STIP);
+    case CSR_SEPC: return state.sepc;
+    case CSR_SBADADDR: return state.sbadaddr;
+    case CSR_STVEC: return state.stvec;
+    case CSR_STIMECMP: return state.stimecmp;
+    case CSR_SCAUSE:
+      if (max_xlen > xlen)
+        return state.scause | ((state.scause >> (max_xlen-1)) << (xlen-1));
+      return state.scause;
+    case CSR_SPTBR: return state.sptbr;
+    case CSR_SASID: return 0;
+    case CSR_SSCRATCH: return state.sscratch;
+    case CSR_MSTATUS: return state.mstatus;
+    case CSR_MIP: return state.mip;
+    case CSR_MIE: return state.mie;
+    case CSR_MEPC: return state.mepc;
+    case CSR_MSCRATCH: return state.mscratch;
+    case CSR_MCAUSE: return state.mcause;
+    case CSR_MBADADDR: return state.mbadaddr;
+    case CSR_MCPUID: return cpuid;
+    case CSR_MIMPID: return IMPL_ROCKET;
+    case CSR_MHARTID: return id;
+    case CSR_MTVEC: return DEFAULT_MTVEC;
+    case CSR_MTDELEG: return 0;
+    case CSR_MTOHOST:
       sim->get_htif()->tick(); // not necessary, but faster
       return state.tohost;
-    case CSR_FROMHOST:
+    case CSR_MFROMHOST:
       sim->get_htif()->tick(); // not necessary, but faster
       return state.fromhost;
+    case CSR_SEND_IPI: return 0;
     case CSR_UARCH0:
     case CSR_UARCH1:
     case CSR_UARCH2:
@@ -416,15 +589,6 @@ reg_t processor_t::get_pcr(int which)
   throw trap_illegal_instruction();
 }
 
-void processor_t::set_interrupt(int which, bool on)
-{
-  uint32_t mask = (1 << (which + SR_IP_SHIFT)) & SR_IP;
-  if (on)
-    state.sr |= mask;
-  else
-    state.sr &= ~mask;
-}
-
 reg_t illegal_instruction(processor_t* p, insn_t insn, reg_t pc)
 {
   throw trap_illegal_instruction();
@@ -438,7 +602,7 @@ insn_func_t processor_t::decode_insn(insn_t insn)
   while ((insn.bits() & desc->mask) != desc->match)
     desc++;
 
-  return rv64 ? desc->rv64 : desc->rv32;
+  return xlen == 64 ? desc->rv64 : desc->rv32;
 }
 
 void processor_t::register_insn(insn_desc_t desc)
