@@ -50,7 +50,8 @@ public:
   #define load_func(type) \
     type##_t load_##type(reg_t addr) __attribute__((always_inline)) { \
       void* paddr = translate(addr, sizeof(type##_t), false, false); \
-	  if(tag_read(addr) & 2) { \
+      reg_t hostaddr = ((char*)paddr - mem); \
+	  if(tag_read_phys(hostaddr) & 2) { \
 	     printf("Illegal load (tagged unreadable) at addr %p.\n",addr); \
 	     exit(2); \
 	  } \
@@ -74,13 +75,14 @@ public:
   #define store_func(type) \
     void store_##type(reg_t addr, type##_t val) { \
       void* paddr = translate(addr, sizeof(type##_t), true, false); \
-	  unsigned char tag = tag_read(addr); \
+          reg_t hostaddr = ((char*)paddr - mem); \
+	  unsigned char tag = tag_read_phys(hostaddr); \
 	  if(tag & 1) { \
 	      printf("Illegal store (tagged read-only) at addr %p.\n",addr); \
 	      exit(1); \
 	  } else if(tag & 4) { \
 	      printf("Clearing tag after successful write at addr %p\n",addr); \
-	      tag_write(addr, 0); \
+	      tag_write_phys(hostaddr, 0); \
 	  } \
       *(type##_t*)paddr = val; \
     }
@@ -104,29 +106,77 @@ public:
 
   static const reg_t ICACHE_ENTRIES = 1024;
   
+  /* paddr must be a guest physical address, i.e. an offset from mem, not a 
+   * pointer within mem */
+  void tag_write_phys(reg_t paddr, char tag)
+  {
+      //set or clear corresponding bit
+      *(tagmem + (paddr>>3)) = tag;
+      //std::cout<<"Store tag at address: "<<std::hex<<paddr<<std::endl;
+      //std::cout<<"Stored value: "<<std::hex<<*(tagmem + (paddr>>3))<<std::endl;
+  }
+  
   //TODO read and write tags
   void tag_write(reg_t addr, char tag)
   {
       //translation from virtual addr to physical addr
-      reg_t pte = walk(addr);
-      reg_t pgoff = addr & (PGSIZE-1);
-      reg_t pgbase = pte >> PGSHIFT << PGSHIFT;
-      reg_t paddr = pgbase + pgoff;
-      //set or clear corresponding bit
-      *(tagmem + (paddr>>3)) = tag;
-      //std::cout<<"Store tag at address: "<<std::hex<<paddr<<std::endl;
+        reg_t pgbase;
+	  if (unlikely(!proc)) {
+	    pgbase = addr & -PGSIZE;
+	  } else {
+	    reg_t mode = get_field(proc->state.mstatus, MSTATUS_PRV);
+	    if (get_field(proc->state.mstatus, MSTATUS_MPRV))
+	      mode = get_field(proc->state.mstatus, MSTATUS_PRV1);
+	    if (get_field(proc->state.mstatus, MSTATUS_VM) == VM_MBARE)
+	      mode = PRV_M;
+	  
+	    if (mode == PRV_M) {
+	      reg_t msb_mask = (reg_t(2) << (proc->xlen-1))-1; // zero-extend from xlen
+	      pgbase = addr & -PGSIZE & msb_mask;
+	    } else {
+	      pgbase = walk(addr, mode > PRV_U, true, false);
+	    }
+	  }
+
+	  reg_t pgoff = addr & (PGSIZE-1);
+	  reg_t paddr = pgbase + pgoff;
+      tag_write_phys(paddr, tag);
   }
-  
-  char tag_read(reg_t addr)
+
+  /* paddr must be a guest physical address, i.e. an offset from mem, not a 
+   * pointer within mem */
+  char tag_read_phys(reg_t paddr)
   {
-      //translation from virtual addr to physical addr
-      reg_t pte = walk(addr);
-      reg_t pgoff = addr & (PGSIZE-1);
-      reg_t pgbase = pte >> PGSHIFT << PGSHIFT;
-      reg_t paddr = pgbase + pgoff;
       //read corresponding bit
       //std::cout<<"Load tag at address: "<<std::hex<<paddr<<std::endl;
       return *(tagmem + (paddr>>3));
+  }
+
+  char tag_read(reg_t addr)
+  {
+      //translation from virtual addr to physical addr
+          reg_t pgbase;
+	  if (unlikely(!proc)) {
+	    pgbase = addr & -PGSIZE;
+	  } else {
+	    reg_t mode = get_field(proc->state.mstatus, MSTATUS_PRV);
+	    if (get_field(proc->state.mstatus, MSTATUS_MPRV))
+	      mode = get_field(proc->state.mstatus, MSTATUS_PRV1);
+	    if (get_field(proc->state.mstatus, MSTATUS_VM) == VM_MBARE)
+	      mode = PRV_M;
+	  
+	    if (mode == PRV_M) {
+	      reg_t msb_mask = (reg_t(2) << (proc->xlen-1))-1; // zero-extend from xlen
+	      pgbase = addr & -PGSIZE & msb_mask;
+	    } else {
+	      pgbase = walk(addr, mode > PRV_U, false, false);
+	    }
+	  }
+
+	  reg_t pgoff = addr & (PGSIZE-1);
+	  reg_t paddr = pgbase + pgoff;
+          
+          return tag_read_phys(paddr);
   }
 
   inline size_t icache_index(reg_t addr)
