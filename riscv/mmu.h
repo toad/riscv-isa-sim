@@ -47,7 +47,8 @@ public:
   #define load_func(type) \
     type##_t load_##type(reg_t addr) __attribute__((always_inline)) { \
       void* paddr = translate(addr, sizeof(type##_t), false, false); \
-	  if(tag_read(addr) & 2) { \
+      reg_t hostaddr = ((char*)paddr - mem); \
+	  if(tag_read_phys(hostaddr) & 2) { \
 	     printf("Illegal load (tagged unreadable) at addr %p.\n",addr); \
 	     exit(2); \
 	  } \
@@ -71,13 +72,14 @@ public:
   #define store_func(type) \
     void store_##type(reg_t addr, type##_t val) { \
       void* paddr = translate(addr, sizeof(type##_t), true, false); \
-	  unsigned char tag = tag_read(addr); \
+          reg_t hostaddr = ((char*)paddr - mem); \
+	  unsigned char tag = tag_read_phys(hostaddr); \
 	  if(tag & 1) { \
 	      printf("Illegal store (tagged read-only) at addr %p.\n",addr); \
 	      exit(1); \
 	  } else if(tag & 4) { \
 	      printf("Clearing tag after successful write at addr %p\n",addr); \
-	      tag_write(addr, 0); \
+	      tag_write_phys(hostaddr, 0); \
 	  } \
       *(type##_t*)paddr = val; \
     }
@@ -97,6 +99,16 @@ public:
   void store_dummy(reg_t addr)
   {
       void *paddr = translate(addr, sizeof(uint64_t), true, false);
+  }
+  
+  /* paddr must be a guest physical address, i.e. an offset from mem, not a 
+   * pointer within mem */
+  void tag_write_phys(reg_t paddr, char tag)
+  {
+      //set or clear corresponding bit
+      *(tagmem + (paddr>>3)) = tag;
+      //std::cout<<"Store tag at address: "<<std::hex<<paddr<<std::endl;
+      //std::cout<<"Stored value: "<<std::hex<<*(tagmem + (paddr>>3))<<std::endl;
   }
   
   //TODO read and write tags
@@ -124,12 +136,18 @@ public:
 
 	  reg_t pgoff = addr & (PGSIZE-1);
 	  reg_t paddr = pgbase + pgoff;
-      //set or clear corresponding bit
-      *(tagmem + (paddr>>3)) = tag;
-      //std::cout<<"Store tag at address: "<<std::hex<<paddr<<std::endl;
-      //std::cout<<"Stored value: "<<std::hex<<*(tagmem + (paddr>>3))<<std::endl;
+      tag_write_phys(paddr, tag);
   }
-  
+
+  /* paddr must be a guest physical address, i.e. an offset from mem, not a 
+   * pointer within mem */
+  char tag_read_phys(reg_t paddr)
+  {
+      //read corresponding bit
+      //std::cout<<"Load tag at address: "<<std::hex<<paddr<<std::endl;
+      return *(tagmem + (paddr>>3));
+  }
+
   char tag_read(reg_t addr)
   {
       //std::cout<<"Load tag at paddress: "<<std::hex<<addr<<std::endl;
@@ -154,9 +172,8 @@ public:
 
 	  reg_t pgoff = addr & (PGSIZE-1);
 	  reg_t paddr = pgbase + pgoff;
-      //read corresponding bit
-      //std::cout<<"Load tag at address: "<<std::hex<<paddr<<std::endl;
-      return *(tagmem + (paddr>>3));
+          
+          return tag_read_phys(paddr);
   }
 
   static const reg_t ICACHE_ENTRIES = 1024;
