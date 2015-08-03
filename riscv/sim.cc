@@ -46,7 +46,7 @@ sim_t::sim_t(const char* isa, size_t nprocs, size_t mem_mb,
   debug_mmu = new mmu_t(mem, tagmem, memsz);
 
   for (size_t i = 0; i < procs.size(); i++) {
-    procs[i] = new processor_t(isa, this, new mmu_t(mem, tagmem, memsz), i);
+    procs[i] = new processor_t(isa, this, i);
   }
 
 }
