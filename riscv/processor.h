@@ -38,6 +38,7 @@ struct state_t
   reg_t pc;
   regfile_t<reg_t, NXPR, true> XPR;
   regfile_t<freg_t, NFPR, false> FPR;
+  regfile_t<tag_t, NXPR, true> TAGR;
 
   // control and status registers
   reg_t mstatus;
@@ -62,6 +63,9 @@ struct state_t
   uint32_t fflags;
   uint32_t frm;
   bool serialized; // whether timer CSRs are in a well-defined state
+
+  reg_t ld_tag;
+  reg_t sd_tag;
 
   reg_t load_reservation;
 

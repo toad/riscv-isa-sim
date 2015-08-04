@@ -42,6 +42,7 @@ private:
   std::unique_ptr<htif_isasim_t> htif;
   char* mem; // main memory
   size_t memsz; // memory size in bytes
+  char* tagmem; // tag memory
   mmu_t* debug_mmu;  // debug port into main memory
   std::vector<processor_t*> procs;
 
@@ -72,8 +73,10 @@ private:
   void interactive_str(const std::string& cmd, const std::vector<std::string>& args);
   void interactive_until(const std::string& cmd, const std::vector<std::string>& args);
   reg_t get_reg(const std::vector<std::string>& args);
+  tag_t get_reg_tag(const std::vector<std::string>& args);
   reg_t get_freg(const std::vector<std::string>& args);
   reg_t get_mem(const std::vector<std::string>& args);
+  tag_t get_mem_tag(const std::vector<std::string>& args);
   reg_t get_pc(const std::vector<std::string>& args);
   reg_t get_tohost(const std::vector<std::string>& args);
 

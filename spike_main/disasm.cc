@@ -498,6 +498,15 @@ disassembler_t::disassembler_t()
   DEFINE_FXTYPE(flt_d);
   DEFINE_FXTYPE(fle_d);
 
+  // define tagged memory related instructions
+  DEFINE_XLOAD(ltag);
+  DEFINE_XSTORE(stag);
+  DEFINE_XSTORE(stal);
+  DEFINE_XLOAD(ldct);
+  DEFINE_XSTORE(sdct);
+  DEFINE_RTYPE(wrt);
+  DEFINE_RTYPE(rdt);
+
   DISASM_INSN("ebreak", c_add, mask_rd | mask_rvc_rs2, {});
   add_insn(new disasm_insn_t("ret", match_c_li | match_rd_ra, mask_c_li | mask_rd | mask_rvc_imm, {}));
   DISASM_INSN("jr", c_li, mask_rvc_imm, {&rvc_rs1});

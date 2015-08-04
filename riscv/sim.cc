@@ -39,7 +39,8 @@ sim_t::sim_t(const char* isa, size_t nprocs, size_t mem_mb,
     fprintf(stderr, "warning: only got %lu bytes of target mem (wanted %lu)\n",
             (unsigned long)memsz, (unsigned long)memsz0);
 
-  debug_mmu = new mmu_t(mem, memsz);
+  tagmem = (char*)calloc(1, memsz>>3);
+  debug_mmu = new mmu_t(mem, tagmem, memsz);
 
   for (size_t i = 0; i < procs.size(); i++)
     procs[i] = new processor_t(isa, this, i);

@@ -18,9 +18,12 @@
 typedef int64_t sreg_t;
 typedef uint64_t reg_t;
 typedef uint64_t freg_t;
+typedef uint8_t tag_t;
 
 const int NXPR = 32;
 const int NFPR = 32;
+
+#define TAG_SIZE 4
 
 #define X_RA 1
 #define X_SP 2
@@ -120,24 +123,29 @@ private:
 #define MMU (*p->get_mmu())
 #define STATE (*p->get_state())
 #define READ_REG(reg) STATE.XPR[reg]
+#define READ_REG_TAG(reg) STATE.TAGR[reg]
 #define RS1 READ_REG(insn.rs1())
+#define RS1_TAG READ_REG_TAG(insn.rs1())
 #define RS2 READ_REG(insn.rs2())
-#define WRITE_REG(reg, value) STATE.XPR.write(reg, value)
-#define WRITE_RD(value) WRITE_REG(insn.rd(), value)
+#define RS2_TAG READ_REG_TAG(insn.rs2())
+#define WRITE_REG_TAG(reg, tag) STATE.TAGR.write(reg, tag)
+#define WRITE_REG(reg, value, tag) ({ STATE.XPR.write(reg, value); WRITE_REG_TAG(reg, tag); })
+#define WRITE_RD(value) WRITE_REG(insn.rd(), value, 0)
 
 #ifdef RISCV_ENABLE_COMMITLOG
   #undef WRITE_REG
-  #define WRITE_REG(reg, value) ({ \
+  #define WRITE_REG(reg, value, tag) ({ \
         reg_t wdata = (value); /* value is a func with side-effects */ \
         STATE.log_reg_write = (commit_log_reg_t){(reg) << 1, wdata}; \
         STATE.XPR.write(reg, wdata); \
+	STATE.TAGR.write(reg, tag); \
       })
 #endif
 
 // RVC macros
-#define WRITE_RVC_RDS(value) WRITE_REG(insn.rvc_rds(), value)
-#define WRITE_RVC_RS1S(value) WRITE_REG(insn.rvc_rs1s(), value)
-#define WRITE_RVC_RS2S(value) WRITE_REG(insn.rvc_rs2s(), value)
+#define WRITE_RVC_RDS(value) WRITE_REG(insn.rvc_rds(), value, 0)
+#define WRITE_RVC_RS1S(value) WRITE_REG(insn.rvc_rs1s(), value, 0)
+#define WRITE_RVC_RS2S(value) WRITE_REG(insn.rvc_rs2s(), value, 0)
 #define RVC_RS1 READ_REG(insn.rvc_rs1())
 #define RVC_RS2 READ_REG(insn.rvc_rs2())
 #define RVC_RS1S READ_REG(insn.rvc_rs1s())

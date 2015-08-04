@@ -24,8 +24,8 @@ processor_t::processor_t(const char* isa, sim_t* sim, uint32_t id)
     id(id), run(false), debug(false)
 {
   parse_isa_string(isa);
-
-  mmu = new mmu_t(sim->mem, sim->memsz);
+  
+  mmu = new mmu_t(sim->mem, sim->tagmem, sim->memsz);
   mmu->set_processor(this);
 
   reset(true);
@@ -121,12 +121,6 @@ void processor_t::set_debug(bool value)
 void processor_t::set_histogram(bool value)
 {
   histogram_enabled = value;
-#ifndef RISCV_ENABLE_HISTOGRAM
-  if (value) {
-    fprintf(stderr, "PC Histogram support has not been properly enabled;");
-    fprintf(stderr, " please re-build the riscv-isa-run project using \"configure --enable-histogram\".\n");
-  }
-#endif
 }
 
 void processor_t::reset(bool value)
@@ -370,6 +364,12 @@ void processor_t::set_csr(int which, reg_t val)
       state.fflags = (val & FSR_AEXC) >> FSR_AEXC_SHIFT;
       state.frm = (val & FSR_RD) >> FSR_RD_SHIFT;
       break;
+    case CSR_LD_TAG:
+      state.ld_tag = val;
+      break;
+    case CSR_SD_TAG:
+      state.sd_tag = val;
+      break;
     case CSR_MTIME:
     case CSR_STIMEW:
       // this implementation ignores writes to MTIME
@@ -502,6 +502,10 @@ reg_t processor_t::get_csr(int which)
       if (!supports_extension('F'))
         break;
       return (state.fflags << FSR_AEXC_SHIFT) | (state.frm << FSR_RD_SHIFT);
+    case CSR_LD_TAG:
+      return state.ld_tag;
+    case CSR_SD_TAG:
+      return state.sd_tag;
     case CSR_MTIME:
     case CSR_STIME:
     case CSR_STIMEW:

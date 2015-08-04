@@ -183,8 +183,9 @@ reg_t sim_t::get_reg(const std::vector<std::string>& args)
     r = strtoul(args[1].c_str(), &ptr, 10);
     if (*ptr) {
       #define DECLARE_CSR(name, number) if (args[1] == #name) return p->get_csr(number);
-      #include "encoding.h"              // generates if's for all csrs
-      r = NXPR;                          // else case (csr name not found)
+      if (0) ;
+      #include "encoding.h"
+      else r = NXPR;
       #undef DECLARE_CSR
     }
   }
@@ -193,6 +194,23 @@ reg_t sim_t::get_reg(const std::vector<std::string>& args)
     throw trap_illegal_instruction();
 
   return p->state.XPR[r];
+}
+
+bool is_CSR(const std::vector<std::string>& args) {
+  unsigned long r = std::find(xpr_name, xpr_name + NXPR, args[1]) - xpr_name;
+  return (r == NXPR);
+}
+
+tag_t sim_t::get_reg_tag(const std::vector<std::string>& args) {
+  if(args.size()!= 2)
+    throw trap_illegal_instruction();
+  
+  processor_t *p = get_core(args[0]);
+  unsigned long index = std::find(xpr_name, xpr_name + NXPR, args[1]) - xpr_name;
+  if(index >= NXPR) 
+    throw trap_illegal_instruction();
+  
+  return p->state.TAGR[index];
 }
 
 reg_t sim_t::get_freg(const std::vector<std::string>& args)
@@ -217,12 +235,14 @@ void sim_t::interactive_reg(const std::string& cmd, const std::vector<std::strin
     processor_t *p = get_core(args[0]);
 
     for (int r = 0; r < NFPR; ++r) {
-      fprintf(stderr, "%-4s: 0x%016" PRIx64 "  ", xpr_name[r], p->state.XPR[r]);
-      if ((r + 1) % 4 == 0)
+      fprintf(stderr, "%-4s: 0x%016" PRIx64 ", (0x%02x)  ", xpr_name[r], p->state.XPR[r], p->state.TAGR[r]);
+      if ((r + 1) % 3 == 0)
         fprintf(stderr, "\n");
     }
-  } else
-    fprintf(stderr, "0x%016" PRIx64 "\n", get_reg(args));
+  } else if (is_CSR(args))
+      fprintf(stderr, "0x%016" PRIx64 "\n", get_reg(args));
+    else
+      fprintf(stderr, "0x%016" PRIx64 ", (0x%02x)\n", get_reg(args), get_reg_tag(args));
 }
 
 union fpr
@@ -283,9 +303,32 @@ reg_t sim_t::get_mem(const std::vector<std::string>& args)
   return val;
 }
 
+tag_t sim_t::get_mem_tag(const std::vector<std::string>& args)
+{
+  if(args.size() != 1 && args.size() != 2)
+    throw trap_illegal_instruction();
+
+  std::string addr_str = args[0];
+  mmu_t* mmu = debug_mmu;
+  if(args.size() == 2)
+  {
+    processor_t *p = get_core(args[0]);
+    mmu = p->get_mmu();
+    addr_str = args[1];
+  }
+
+  reg_t addr = strtol(addr_str.c_str(),NULL,16);
+  if(addr == LONG_MAX)
+    addr = strtoul(addr_str.c_str(),NULL,16);
+
+  tag_t val = 0;  
+  if((addr % 8) == 0) val = mmu->tag_read(addr);
+  return val;
+}
+
 void sim_t::interactive_mem(const std::string& cmd, const std::vector<std::string>& args)
 {
-  fprintf(stderr, "0x%016" PRIx64 "\n", get_mem(args));
+  fprintf(stderr, "0x%016" PRIx64 " (0x%02x)\n", get_mem(args), get_mem_tag(args));
 }
 
 void sim_t::interactive_str(const std::string& cmd, const std::vector<std::string>& args)
