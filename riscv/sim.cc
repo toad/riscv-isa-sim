@@ -38,10 +38,6 @@ sim_t::sim_t(const char* isa, size_t nprocs, size_t mem_mb,
   //TODO allocate memory for mem tags, using char to store 8 tags, therefore using memsz/8 chars
   tagmem = (char*)calloc(1, memsz>>3);
   
-
-  //TODO allocate memory for mem tags, using char to store 8 tags, therefore using memsz/8 chars
-  tagmem = (char*)calloc(1, memsz>>3);
-  
   if (memsz != memsz0)
     fprintf(stderr, "warning: only got %lu bytes of target mem (wanted %lu)\n",
             (unsigned long)memsz, (unsigned long)memsz0);
