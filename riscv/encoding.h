@@ -364,7 +364,7 @@
 #define MATCH_FLT_D 0xa2001053
 #define MASK_FLT_D  0xfe00707f
 #define MATCH_FLT_S 0xa0001053
-#define MASK_FLT_S  0xfe00707
+#define MASK_FLT_S  0xfe00707f
 #define MATCH_FLW 0x2007
 #define MASK_FLW  0x707f
 #define MATCH_FMADD_D 0x2000043
