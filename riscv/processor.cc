@@ -25,7 +25,7 @@ processor_t::processor_t(const char* isa, sim_t* sim, uint32_t id)
 {
   parse_isa_string(isa);
 
-  mmu = new mmu_t(sim->mem, sim->memsz);
+  mmu = new mmu_t(sim->mem, sim->tagmem, sim->memsz);
   mmu->set_processor(this);
 
   reset(true);
