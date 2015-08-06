@@ -132,6 +132,20 @@ private:
 #define WRITE_REG(reg, value, tag) ({ STATE.XPR.write(reg, value); WRITE_REG_TAG(reg, tag); })
 #define WRITE_RD(value) WRITE_REG(insn.rd(), value, 0)
 
+#define STORE_TAG_CHECK(addr) ({tag_t mem_tag = MMU.tag_read(addr); \
+	int csr = validate_csr(CSR_SD_TAG, true); \
+	reg_t csr_content = p->get_csr(csr); \
+	if((csr_content >> mem_tag) & 1) { \
+		throw trap_store_tag(addr); \
+	} })
+
+#define LOAD_TAG_CHECK(addr) ({tag_t mem_tag = MMU.tag_read(addr); \
+	int csr = validate_csr(CSR_LD_TAG, true); \
+	reg_t csr_content = p->get_csr(csr); \
+	if((csr_content >> mem_tag) & 1) { \
+		throw trap_load_tag(addr); \
+	} })
+
 #ifdef RISCV_ENABLE_COMMITLOG
   #undef WRITE_REG
   #define WRITE_REG(reg, value, tag) ({ \
