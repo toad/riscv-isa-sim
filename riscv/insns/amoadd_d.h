@@ -1,4 +1,6 @@
 require_extension('A');
+LOAD_TAG_CHECK(RS1);
+STORE_TAG_CHECK(RS1);
 require_rv64;
 reg_t v = MMU.load_uint64(RS1);
 tag_t t = MMU.tag_read(RS1);
