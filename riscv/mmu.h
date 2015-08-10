@@ -38,20 +38,19 @@ class mmu_t
 public:
   mmu_t(char* _mem, char* _tagmem, size_t _memsz);
   ~mmu_t();
-  
-  /** Tags:
-    * Bit 0: Disallow write
-    * Bit 1: Disallow read
-    * Bit 2: Clear after write
-    * E.g. 4 = clear tag on write (clean/dirty), 6 = write-then-read
-    */
+
+/* Tags. Note *all* tags are "lazy" now! */
+#define __RISCV_TAG_READ_ONLY 1
+#define __RISCV_TAG_WRITE_ONLY 2
+#define __RISCV_TAG_INVALID 3
 
   // template for functions that load an aligned value from memory
   #define load_func(type) \
     type##_t load_##type(reg_t addr) __attribute__((always_inline)) { \
       void* paddr = translate(addr, sizeof(type##_t), false, false); \
       reg_t hostaddr = ((char*)paddr - mem); \
-	  if(tag_read_phys(hostaddr) & 2) { \
+	  unsigned char tag = tag_read_phys(hostaddr); \
+          if(tag == __RISCV_TAG_WRITE_ONLY || tag == __RISCV_TAG_INVALID) { \
 	     printf("Illegal load (tagged unreadable) at addr %p.\n",addr); \
 	     exit(2); \
 	  } \
@@ -77,10 +76,10 @@ public:
       void* paddr = translate(addr, sizeof(type##_t), true, false); \
           reg_t hostaddr = ((char*)paddr - mem); \
 	  unsigned char tag = tag_read_phys(hostaddr); \
-	  if(tag & 1) { \
-	      printf("Illegal store (tagged read-only) at addr %p.\n",addr); \
+          if(tag == __RISCV_TAG_READ_ONLY || tag == __RISCV_TAG_INVALID) { \
+	      printf("Illegal store (tagged %d) at addr %p.\n",(int)tag,addr); \
 	      exit(1); \
-	  } else if(tag & 4) { \
+	  } else if(tag) { \
 	      printf("Clearing tag after successful write at addr %p\n",addr); \
 	      tag_write_phys(hostaddr, 0); \
 	  } \
