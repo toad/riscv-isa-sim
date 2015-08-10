@@ -51,7 +51,7 @@ public:
       reg_t hostaddr = ((char*)paddr - mem); \
 	  unsigned char tag = tag_read_phys(hostaddr); \
           if(tag == __RISCV_TAG_WRITE_ONLY || tag == __RISCV_TAG_INVALID) { \
-	     printf("Illegal load (tagged unreadable) at addr %p.\n",addr); \
+	     printf("Illegal load (tagged %d) at addr %p.\n",(int)tag,addr); \
 	     exit(2); \
 	  } \
       return *(type##_t*)paddr; \
@@ -80,7 +80,7 @@ public:
 	      printf("Illegal store (tagged %d) at addr %p.\n",(int)tag,addr); \
 	      exit(1); \
 	  } else if(tag) { \
-	      printf("Clearing tag after successful write at addr %p\n",addr); \
+	      printf("Clearing tag %d after successful write at addr %p\n",(int)tag,addr); \
 	      tag_write_phys(hostaddr, 0); \
 	  } \
       *(type##_t*)paddr = val; \
