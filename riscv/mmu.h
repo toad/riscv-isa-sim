@@ -97,7 +97,7 @@ public:
 	      reg_t msb_mask = (reg_t(2) << (proc->xlen-1))-1; // zero-extend from xlen
 	      pgbase = addr & -PGSIZE & msb_mask;
 	    } else {
-	      pgbase = walk(addr, mode > PRV_U, true, false);
+	      pgbase = walk(addr, mode > PRV_U, false, false);
 	    }
 	  }
 
