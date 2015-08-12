@@ -1,5 +1,6 @@
 require_extension('A');
-STORE_TAG_CHECK(RS1+insn.s_imm());
+STORE_TAG_CHECK(RS1);
+
 if (RS1 == p->get_state()->load_reservation)
 {
   MMU.store_uint32(RS1, RS2);
