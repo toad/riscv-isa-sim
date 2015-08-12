@@ -156,10 +156,11 @@ private:
 #define LOAD_STORE_TAG_CHECK(addr) ({tag_t mem_tag = MMU.tag_read(addr); \
 	reg_t ld_csr_content = p->get_csr(CSR_LD_TAG);			\
 	reg_t sd_csr_content = p->get_csr(CSR_SD_TAG); 			\
-	if(IS_IN_USER_MODE &&						\
-	   (((ld_csr_content >> mem_tag) & 1) || 			\
-	   ((sd_csr_content >> mem_tag) & 1))) { 			\
-		throw trap_load_tag(addr); 				\
+	if(IS_IN_USER_MODE) {						\
+		if((ld_csr_content >> mem_tag) & 1) 			\
+			throw trap_load_tag(addr);			\
+		else if((sd_csr_content >> mem_tag) & 1)		\
+			throw trap_store_tag(addr);			\
 	} })
 
 #ifdef RISCV_ENABLE_COMMITLOG
