@@ -81,9 +81,23 @@ public:
   //TODO read and write tags
   void tag_write(reg_t addr, tag_t tag)
   {
-      //std::cout<<"Store tag at paddress: "<<std::hex<<addr<<std::endl;
-      //translation from virtual addr to physical addr
-        reg_t pgbase;
+      
+	//printf("vaddr: %lx\n", addr);
+	if(proc->debug) 
+		printf("tag_write: vaddress: %lx, ", addr);
+
+	void *p_mem_addr = translate(addr, sizeof(uint8_t), true, false);
+	reg_t p_tag_addr = (reg_t) p_mem_addr - (reg_t) mem;
+
+	if(proc->debug) {
+                printf("paddress: %lx\n", p_tag_addr);
+        }
+
+	*(tagmem + (p_tag_addr>>3)) = tag;
+	return;
+	
+	// Hongyan's code
+	  reg_t pgbase;
 	  if (unlikely(!proc)) {
 	    pgbase = addr & -PGSIZE;
 	  } else {
@@ -103,17 +117,37 @@ public:
 
 	  reg_t pgoff = addr & (PGSIZE-1);
 	  reg_t paddr = pgbase + pgoff;
+
+          if (pgbase >= memsz) {
+                throw trap_store_access_fault(addr);
+          }
+        if(proc->debug) {
+                printf("paddress: %lx\n", paddr);
+        }
+
+
       //set or clear corresponding bit
       *(tagmem + (paddr>>3)) = tag;
-      //std::cout<<"Store tag at address: "<<std::hex<<paddr<<std::endl;
-      //std::cout<<"Stored value: "<<std::hex<<*(tagmem + (paddr>>3))<<std::endl;
   }
   
   char tag_read(reg_t addr)
   {
-      //std::cout<<"Load tag at address: "<<std::hex<<addr<<std::endl;
-      //translation from virtual addr to physical addr
-          reg_t pgbase;
+	//printf("vaddr: %lx\n", addr);
+	if(proc->debug) {
+		printf("tag_read: vaddress: %lx, ", addr);
+	}
+
+	void *p_mem_addr = translate(addr, sizeof(uint8_t), false, false);
+	reg_t p_tag_addr = (reg_t) p_mem_addr - (reg_t) mem;
+
+	if(proc->debug) {
+		printf("paddress: %lx\n", p_tag_addr);
+	}
+
+	return *(tagmem + (p_tag_addr >> 3));
+	
+	//Hongyans's code:
+	    reg_t pgbase;
 	  if (unlikely(!proc)) {
 	    pgbase = addr & -PGSIZE;
 	  } else {
@@ -133,7 +167,17 @@ public:
 
 	  reg_t pgoff = addr & (PGSIZE-1);
 	  reg_t paddr = pgbase + pgoff;
+
+	  if (pgbase >= memsz) {
+    		throw trap_load_access_fault(addr);
+	  }
+
+        if(proc->debug) {
+                printf("paddress: %lx\n", paddr);
+        }
+
       //read corresponding bit
+      //std::cout<<"Load tag at address: "<<std::hex<<paddr<<std::endl;
       return *(tagmem + (paddr>>3));
   }
 
@@ -238,8 +282,10 @@ private:
       fetch ? throw trap_instruction_address_misaligned(addr) :
       throw trap_load_address_misaligned(addr);
 
-    if (likely(tag == expected_tag))
+    if (likely(tag == expected_tag)) {
+//      printf("TLB hit! vaddress: %lx, paddress: %lx\n", addr, data);
       return data;
+    }
 
     return refill_tlb(addr, bytes, store, fetch);
   }
