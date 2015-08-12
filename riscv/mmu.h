@@ -78,107 +78,19 @@ public:
       void *paddr = translate(addr, sizeof(uint64_t), true, false);
   }
   
-  //TODO read and write tags
   void tag_write(reg_t addr, tag_t tag)
   {
-      
-	//printf("vaddr: %lx\n", addr);
-	if(proc->debug) 
-		printf("tag_write: vaddress: %lx, ", addr);
-
 	void *p_mem_addr = translate(addr, sizeof(uint8_t), true, false);
 	reg_t p_tag_addr = (reg_t) p_mem_addr - (reg_t) mem;
-
-	if(proc->debug) {
-                printf("paddress: %lx\n", p_tag_addr);
-        }
-
 	*(tagmem + (p_tag_addr>>3)) = tag;
 	return;
-	
-	// Hongyan's code
-	  reg_t pgbase;
-	  if (unlikely(!proc)) {
-	    pgbase = addr & -PGSIZE;
-	  } else {
-	    reg_t mode = get_field(proc->state.mstatus, MSTATUS_PRV);
-	    if (get_field(proc->state.mstatus, MSTATUS_MPRV))
-	      mode = get_field(proc->state.mstatus, MSTATUS_PRV1);
-	    if (get_field(proc->state.mstatus, MSTATUS_VM) == VM_MBARE)
-	      mode = PRV_M;
-	  
-	    if (mode == PRV_M) {
-	      reg_t msb_mask = (reg_t(2) << (proc->xlen-1))-1; // zero-extend from xlen
-	      pgbase = addr & -PGSIZE & msb_mask;
-	    } else {
-	      pgbase = walk(addr, mode > PRV_U, true, false);
-	    }
-	  }
-
-	  reg_t pgoff = addr & (PGSIZE-1);
-	  reg_t paddr = pgbase + pgoff;
-
-          if (pgbase >= memsz) {
-                throw trap_store_access_fault(addr);
-          }
-        if(proc->debug) {
-                printf("paddress: %lx\n", paddr);
-        }
-
-
-      //set or clear corresponding bit
-      *(tagmem + (paddr>>3)) = tag;
   }
   
   char tag_read(reg_t addr)
   {
-	//printf("vaddr: %lx\n", addr);
-	if(proc->debug) {
-		printf("tag_read: vaddress: %lx, ", addr);
-	}
-
 	void *p_mem_addr = translate(addr, sizeof(uint8_t), false, false);
 	reg_t p_tag_addr = (reg_t) p_mem_addr - (reg_t) mem;
-
-	if(proc->debug) {
-		printf("paddress: %lx\n", p_tag_addr);
-	}
-
 	return *(tagmem + (p_tag_addr >> 3));
-	
-	//Hongyans's code:
-	    reg_t pgbase;
-	  if (unlikely(!proc)) {
-	    pgbase = addr & -PGSIZE;
-	  } else {
-	    reg_t mode = get_field(proc->state.mstatus, MSTATUS_PRV);
-	    if (get_field(proc->state.mstatus, MSTATUS_MPRV))
-	      mode = get_field(proc->state.mstatus, MSTATUS_PRV1);
-	    if (get_field(proc->state.mstatus, MSTATUS_VM) == VM_MBARE)
-	      mode = PRV_M;
-	  
-	    if (mode == PRV_M) {
-	      reg_t msb_mask = (reg_t(2) << (proc->xlen-1))-1; // zero-extend from xlen
-	      pgbase = addr & -PGSIZE & msb_mask;
-	    } else {
-	      pgbase = walk(addr, mode > PRV_U, false, false);
-	    }
-	  }
-
-	  reg_t pgoff = addr & (PGSIZE-1);
-	  reg_t paddr = pgbase + pgoff;
-
-	  if (pgbase >= memsz) {
-    		throw trap_load_access_fault(addr);
-	  }
-
-        if(proc->debug) {
-                printf("paddress: %lx\n", paddr);
-        }
-
-      //read corresponding bit
-      //std::cout<<"Load tag at address: "<<std::hex<<paddr<<std::endl;
-      return *(tagmem + (paddr>>3));
   }
 
   static const reg_t ICACHE_ENTRIES = 1024;
