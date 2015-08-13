@@ -1,5 +1,7 @@
 require_rv64;
-STORE_TAG_CHECK(RS1+insn.s_imm());
+reg_t address = RS1 + insn.s_imm();
+tag_t mem_tag = MMU.tag_read(address);
+STORE_TAG_CHECK(mem_tag, address);
 // store data
-MMU.store_uint64(RS1 + insn.s_imm(), RS2);
+MMU.store_uint64(address, RS2);
 

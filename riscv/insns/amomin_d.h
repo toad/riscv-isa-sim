@@ -1,6 +1,8 @@
 require_extension('A');
 require_rv64;
-LOAD_STORE_TAG_CHECK(RS1);
-sreg_t v = MMU.load_int64(RS1);
-MMU.store_uint64(RS1, std::min(sreg_t(RS2),v));
+reg_t address = RS1;
+tag_t mem_tag = MMU.tag_read(address);
+LOAD_STORE_TAG_CHECK(mem_tag, address);
+sreg_t v = MMU.load_int64(address);
+MMU.store_uint64(address, std::min(sreg_t(RS2),v));
 WRITE_RD(v);
