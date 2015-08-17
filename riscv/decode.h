@@ -138,22 +138,21 @@ private:
 
 #define IS_IN_USER_MODE (get_field(STATE.mstatus, MSTATUS_PRV) == PRV_U)
 
-#define STORE_TAG_CHECK(addr) ({					\
-	tag_t mem_tag = MMU.tag_read(addr); 				\
+#define STORE_TAG_CHECK(mem_tag, addr) ({				\
 	int csr = validate_csr(CSR_SD_TAG, false); 			\
 	reg_t csr_content = p->get_csr(csr); 				\
 	if(IS_IN_USER_MODE && ((csr_content >> mem_tag) & 1)) { 	\
 		throw trap_store_tag(addr); 				\
 	} })
 
-#define LOAD_TAG_CHECK(addr) ({tag_t mem_tag = MMU.tag_read(addr); 	\
+#define LOAD_TAG_CHECK(mem_tag, addr) ({				\
 	int csr = validate_csr(CSR_LD_TAG, false); 			\
 	reg_t csr_content = p->get_csr(csr); 				\
 	if( IS_IN_USER_MODE && ((csr_content >> mem_tag) & 1)) { 	\
 		throw trap_load_tag(addr); 				\
 	} })
 
-#define LOAD_STORE_TAG_CHECK(addr) ({tag_t mem_tag = MMU.tag_read(addr); \
+#define LOAD_STORE_TAG_CHECK(mem_tag, addr) ({ 				\
 	reg_t ld_csr_content = p->get_csr(CSR_LD_TAG);			\
 	reg_t sd_csr_content = p->get_csr(CSR_SD_TAG); 			\
 	if(IS_IN_USER_MODE) {						\
