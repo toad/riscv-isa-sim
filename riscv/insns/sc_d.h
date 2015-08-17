@@ -7,6 +7,8 @@ if (address == p->get_state()->load_reservation)
 {
   // store data
   MMU.store_uint64(address, RS2);
+  // store tag
+  MMU.tag_write(address, 0);
   WRITE_RD(0);
 }
 else
