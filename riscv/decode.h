@@ -122,6 +122,10 @@ private:
 // helpful macros, etc
 #define MMU (*p->get_mmu())
 #define STATE (*p->get_state())
+
+#define get_field(reg, mask) (((reg) & (decltype(reg))(mask)) / ((mask) & ~((mask) << 1)))
+#define set_field(reg, mask, val) (((reg) & ~(decltype(reg))(mask)) | (((decltype(reg))(val) * ((mask) & ~((mask) << 1))) & (decltype(reg))(mask)))
+
 #define READ_REG(reg) STATE.XPR[reg]
 #define READ_REG_TAG(reg) STATE.TAGR[reg]
 #define RS1 READ_REG(insn.rs1())
@@ -131,6 +135,33 @@ private:
 #define WRITE_REG_TAG(reg, tag) STATE.TAGR.write(reg, tag)
 #define WRITE_REG(reg, value, tag) ({ STATE.XPR.write(reg, value); WRITE_REG_TAG(reg, tag); })
 #define WRITE_RD(value) WRITE_REG(insn.rd(), value, 0)
+
+#define IS_IN_USER_MODE (get_field(STATE.mstatus, MSTATUS_PRV) == PRV_U)
+
+#define STORE_TAG_CHECK(addr) ({					\
+	tag_t mem_tag = MMU.tag_read(addr); 				\
+	int csr = validate_csr(CSR_SD_TAG, false); 			\
+	reg_t csr_content = p->get_csr(csr); 				\
+	if(IS_IN_USER_MODE && ((csr_content >> mem_tag) & 1)) { 	\
+		throw trap_store_tag(addr); 				\
+	} })
+
+#define LOAD_TAG_CHECK(addr) ({tag_t mem_tag = MMU.tag_read(addr); 	\
+	int csr = validate_csr(CSR_LD_TAG, false); 			\
+	reg_t csr_content = p->get_csr(csr); 				\
+	if( IS_IN_USER_MODE && ((csr_content >> mem_tag) & 1)) { 	\
+		throw trap_load_tag(addr); 				\
+	} })
+
+#define LOAD_STORE_TAG_CHECK(addr) ({tag_t mem_tag = MMU.tag_read(addr); \
+	reg_t ld_csr_content = p->get_csr(CSR_LD_TAG);			\
+	reg_t sd_csr_content = p->get_csr(CSR_SD_TAG); 			\
+	if(IS_IN_USER_MODE) {						\
+		if((ld_csr_content >> mem_tag) & 1) 			\
+			throw trap_load_tag(addr);			\
+		else if((sd_csr_content >> mem_tag) & 1)		\
+			throw trap_store_tag(addr);			\
+	} })
 
 #ifdef RISCV_ENABLE_COMMITLOG
   #undef WRITE_REG
@@ -177,9 +208,6 @@ private:
               if(rm == 7) rm = STATE.frm; \
               if(rm > 4) throw trap_illegal_instruction(); \
               rm; })
-
-#define get_field(reg, mask) (((reg) & (decltype(reg))(mask)) / ((mask) & ~((mask) << 1)))
-#define set_field(reg, mask, val) (((reg) & ~(decltype(reg))(mask)) | (((decltype(reg))(val) * ((mask) & ~((mask) << 1))) & (decltype(reg))(mask)))
 
 #define require(x) if (unlikely(!(x))) throw trap_illegal_instruction()
 #define require_privilege(p) require(get_field(STATE.mstatus, MSTATUS_PRV) >= (p))
