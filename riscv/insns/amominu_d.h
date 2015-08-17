@@ -5,4 +5,6 @@ tag_t mem_tag = MMU.tag_read(address);
 LOAD_STORE_TAG_CHECK(mem_tag, address);
 reg_t v = MMU.load_uint64(address);
 MMU.store_uint64(address, std::min(RS2,v));
+// store tag
+MMU.tag_write(address, 0);
 WRITE_RD(v);
