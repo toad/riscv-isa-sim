@@ -80,7 +80,7 @@ public:
   
   void tag_write(reg_t addr, tag_t tag)
   {
-	void *p_mem_addr = translate(addr, sizeof(uint8_t), true, false);
+	void *p_mem_addr = translate(addr, sizeof(uint8_t), false, false);
 	reg_t p_tag_addr = (reg_t) p_mem_addr - (reg_t) mem;
 	*(tagmem + (p_tag_addr>>3)) = tag;
 	return;
