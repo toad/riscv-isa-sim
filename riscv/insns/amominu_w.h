@@ -1,5 +1,7 @@
 require_extension('A');
-LOAD_STORE_TAG_CHECK(RS1);
-uint32_t v = MMU.load_int32(RS1);
-MMU.store_uint32(RS1, std::min(uint32_t(RS2),v));
+reg_t address = RS1;
+tag_t mem_tag = MMU.tag_read(address);
+LOAD_STORE_TAG_CHECK(mem_tag, address);
+uint32_t v = MMU.load_int32(address);
+MMU.store_uint32(address, std::min(uint32_t(RS2),v));
 WRITE_RD((int32_t)v);

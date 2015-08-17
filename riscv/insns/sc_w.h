@@ -1,9 +1,11 @@
 require_extension('A');
-STORE_TAG_CHECK(RS1);
+reg_t address = RS1;
+tag_t mem_tag = MMU.tag_read(address);
+STORE_TAG_CHECK(mem_tag, address);
 
-if (RS1 == p->get_state()->load_reservation)
+if (address == p->get_state()->load_reservation)
 {
-  MMU.store_uint32(RS1, RS2);
+  MMU.store_uint32(address, RS2);
   WRITE_RD(0);
 }
 else
